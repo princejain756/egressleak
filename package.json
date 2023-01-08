@@ -1,0 +1,10 @@
+{
+  "name": "egressleak",
+  "version": "0.0.1",
+  "description": "Audit outbound HTTP egress and context PII in local coding agent sessions.",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}
