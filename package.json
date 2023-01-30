@@ -3,6 +3,10 @@
   "version": "0.0.1",
   "description": "Audit outbound HTTP egress and context PII in local coding agent sessions.",
   "type": "module",
+  "main": "./src/analyzer.mjs",
+  "scripts": {
+    "test": "node --test tests/egressleak.test.mjs"
+  },
   "engines": {
     "node": ">=18.0.0"
   },
