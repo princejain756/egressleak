@@ -69,3 +69,108 @@ export function redactSensitive(input) {
 
 const EMAIL_RE =
   /\b([a-zA-Z0-9._%+-]{1,40})@([a-zA-Z0-9.-]{1,40}\.(?:com|org|net|io|dev|ai|co|in|edu|gov|sh|app|me|uk|de|fr|jp))\b/gi;
+
+export function scanStaticIdentitySurface({ claudeJsonPath, claudeSettingsPath, gitConfigPath, instructionPaths = [] }) {
+  const findings = [];
+  const stats = {
+    hasOauthEmail: false,
+    hasHardwareIds: false,
+    telemetryDisabled: false,
+    remoteMcpCount: 0,
+    instructionEmailCount: 0
+  };
+
+  if (claudeSettingsPath && fs.existsSync(claudeSettingsPath)) {
+    try {
+      const settingsObj = JSON.parse(fs.readFileSync(claudeSettingsPath, "utf8"));
+      const env = settingsObj?.env || {};
+      if (env.DISABLE_TELEMETRY === "1" || env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC === "1") {
+        stats.telemetryDisabled = true;
+      }
+    } catch {
+      // ignore malformed JSON
+    }
+  }
+
+  if (claudeJsonPath && fs.existsSync(claudeJsonPath)) {
+    try {
+      const cj = JSON.parse(fs.readFileSync(claudeJsonPath, "utf8"));
+      const oauthEmail = cj?.oauthAccount?.emailAddress;
+      if (oauthEmail) {
+        stats.hasOauthEmail = true;
+        findings.push({
+          ruleId: "EGL001",
+          plane: "identity",
+          severity: "CRITICAL",
+          file: claudeJsonPath,
+          detail: `oauthAccount.emailAddress (${redactSensitive(oauthEmail)}) is stored in ~/.claude.json and auto-injected into session context (#55743 / #107757)`,
+          evidence: redactSensitive(`oauthAccount.emailAddress = "${oauthEmail}"`)
+        });
+      }
+
+      if ((cj?.userID || cj?.machineID) && !stats.telemetryDisabled) {
+        stats.hasHardwareIds = true;
+        const idParts = [];
+        if (cj.userID) idParts.push("userID");
+        if (cj.machineID) idParts.push("machineID");
+        findings.push({
+          ruleId: "EGL002",
+          plane: "identity",
+          severity: "HIGH",
+          file: claudeJsonPath,
+          detail: `Persistent tracking identifiers (${idParts.join(", ")}) active in ~/.claude.json without DISABLE_TELEMETRY=1`,
+          evidence: `Active keys: ${idParts.join(", ")}`
+        });
+      }
+
+      for (const [name, cfg] of Object.entries(cj?.mcpServers || {})) {
+        const cmd = String(cfg?.command || "");
+        const args = Array.isArray(cfg?.args) ? cfg.args.map(String) : [];
+        const url = String(cfg?.url || "");
+        const joined = `${cmd} ${args.join(" ")} ${url}`.trim();
+        if (/\bssh\b/i.test(cmd) || /^https?:\/\//i.test(url) || args.some((a) => /^https?:\/\//i.test(a))) {
+          stats.remoteMcpCount++;
+          findings.push({
+            ruleId: "EGL003",
+            plane: "identity",
+            severity: "HIGH",
+            file: claudeJsonPath,
+            detail: `Remote MCP server "${name}" transmits tool arguments over SSH or network (${redactSensitive(joined)})`,
+            evidence: redactSensitive(`${name}: ${joined}`)
+          });
+        }
+      }
+    } catch {
+      // ignore unreadable state
+    }
+  }
+
+  const allInstructionFiles = [...instructionPaths];
+  if (gitConfigPath && fs.existsSync(gitConfigPath)) allInstructionFiles.push(gitConfigPath);
+
+  for (const p of allInstructionFiles) {
+    if (!p || !fs.existsSync(p)) continue;
+    try {
+      const content = fs.readFileSync(p, "utf8");
+      const realEmails = [...content.matchAll(EMAIL_RE)]
+        .map((m) => `${m[1]}@${m[2]}`)
+        .filter((e) => !isSyntheticEmail(e));
+      if (realEmails.length > 0) {
+        stats.instructionEmailCount += realEmails.length;
+        const uniqueRedacted = [...new Set(realEmails.map((e) => redactSensitive(e)))];
+        findings.push({
+          ruleId: "EGL004",
+          plane: "identity",
+          severity: "MEDIUM",
+          file: p,
+          detail: `${realEmails.length} personal/work email reference(s) (${uniqueRedacted.slice(0, 3).join(", ")}) loaded into agent context`,
+          evidence: uniqueRedacted.slice(0, 3).join(", ")
+        });
+      }
+    } catch {
+      // ignore unreadable instruction file
+    }
+  }
+
+  return { findings, stats };
+}
