@@ -174,3 +174,27 @@ export function scanStaticIdentitySurface({ claudeJsonPath, claudeSettingsPath, 
 
   return { findings, stats };
 }
+
+export function computeRiskSummary(findings) {
+  const ruleCounts = {};
+  const severityCounts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0, INFO: 0 };
+
+  for (const f of findings) {
+    ruleCounts[f.ruleId] = (ruleCounts[f.ruleId] || 0) + 1;
+    if (severityCounts[f.severity] !== undefined) severityCounts[f.severity]++;
+  }
+
+  let penalty = 0;
+  for (const [severity, count] of Object.entries(severityCounts)) {
+    penalty += Math.min(3, count) * (SEVERITY_PENALTY[severity] || 0);
+  }
+
+  const score = Math.max(0, Math.min(100, 100 - penalty));
+  let grade = "A";
+  if (score < 45) grade = "F";
+  else if (score < 60) grade = "D";
+  else if (score < 75) grade = "C";
+  else if (score < 90) grade = "B";
+
+  return { score, grade, ruleCounts, severityCounts };
+}
