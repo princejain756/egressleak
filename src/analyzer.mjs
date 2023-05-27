@@ -24,6 +24,30 @@ export const RULE_META = {
     plane: "identity",
     severity: "MEDIUM",
     title: "Personal Email or Phone Hardcoded in Global Agent Instructions / Git Config"
+  },
+  EGL007: {
+    id: "EGL007",
+    plane: "egress",
+    severity: "CRITICAL",
+    title: "Email or Operator Identity Sent in Outbound User-Agent / HTTP Header (#107757)"
+  },
+  EGL008: {
+    id: "EGL008",
+    plane: "egress",
+    severity: "CRITICAL",
+    title: "Email or Personal Identifier Leaked in Outbound URL Query / Payload"
+  },
+  EGL011: {
+    id: "EGL011",
+    plane: "egress",
+    severity: "HIGH",
+    title: "External Third-Party Domain Contacted via Agent Tool Call"
+  },
+  EGL014: {
+    id: "EGL014",
+    plane: "egress",
+    severity: "INFO",
+    title: "Loopback / Localhost Dev Request Separated from External Egress"
   }
 };
 
@@ -69,6 +93,11 @@ export function redactSensitive(input) {
 
 const EMAIL_RE =
   /\b([a-zA-Z0-9._%+-]{1,40})@([a-zA-Z0-9.-]{1,40}\.(?:com|org|net|io|dev|ai|co|in|edu|gov|sh|app|me|uk|de|fr|jp))\b/gi;
+const URL_RE = /https?:\/\/[a-zA-Z0-9._~:/?#\[\]@!$&()*+,;=%-]+/gi;
+
+function realEmailsIn(text) {
+  return [...text.matchAll(EMAIL_RE)].map((m) => `${m[1]}@${m[2]}`).filter((e) => !isSyntheticEmail(e));
+}
 
 export function scanStaticIdentitySurface({ claudeJsonPath, claudeSettingsPath, gitConfigPath, instructionPaths = [] }) {
   const findings = [];
@@ -151,10 +180,7 @@ export function scanStaticIdentitySurface({ claudeJsonPath, claudeSettingsPath, 
   for (const p of allInstructionFiles) {
     if (!p || !fs.existsSync(p)) continue;
     try {
-      const content = fs.readFileSync(p, "utf8");
-      const realEmails = [...content.matchAll(EMAIL_RE)]
-        .map((m) => `${m[1]}@${m[2]}`)
-        .filter((e) => !isSyntheticEmail(e));
+      const realEmails = realEmailsIn(fs.readFileSync(p, "utf8"));
       if (realEmails.length > 0) {
         stats.instructionEmailCount += realEmails.length;
         const uniqueRedacted = [...new Set(realEmails.map((e) => redactSensitive(e)))];
@@ -175,26 +201,79 @@ export function scanStaticIdentitySurface({ claudeJsonPath, claudeSettingsPath, 
   return { findings, stats };
 }
 
-export function computeRiskSummary(findings) {
-  const ruleCounts = {};
-  const severityCounts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0, INFO: 0 };
+export function analyzeOutboundCall({ toolName, rawInput, sourceFile }) {
+  const findings = [];
+  const externalDomains = [];
+  let loopbackCount = 0;
 
-  for (const f of findings) {
-    ruleCounts[f.ruleId] = (ruleCounts[f.ruleId] || 0) + 1;
-    if (severityCounts[f.severity] !== undefined) severityCounts[f.severity]++;
+  const text = String(rawInput || "");
+  if (!text) return { findings, externalDomains, loopbackCount };
+
+  const hasUserAgentFlag =
+    /User-Agent\s*[:=]/i.test(text) ||
+    /\bcurl\b[^\n]*?\s(?:-A|--user-agent)\s+/i.test(text) ||
+    /headers\s*=\s*\{[^}]*['"]User-Agent['"]/i.test(text);
+
+  if (hasUserAgentFlag) {
+    const emails = realEmailsIn(text);
+    if (emails.length > 0) {
+      findings.push({
+        ruleId: "EGL007",
+        plane: "egress",
+        severity: "CRITICAL",
+        file: sourceFile,
+        detail: `Outbound ${toolName} sets User-Agent header containing real email (${redactSensitive(emails[0])})`,
+        evidence: redactSensitive(text.slice(0, 220))
+      });
+    }
   }
 
-  let penalty = 0;
-  for (const [severity, count] of Object.entries(severityCounts)) {
-    penalty += Math.min(3, count) * (SEVERITY_PENALTY[severity] || 0);
+  for (const rawUrl of text.match(URL_RE) || []) {
+    const cleanUrl = rawUrl.replace(/[\\"')\]}>.,;]+$/, "");
+    let parsed;
+    try {
+      parsed = new URL(cleanUrl);
+    } catch {
+      continue;
+    }
+
+    const host = parsed.hostname.toLowerCase();
+    if (isLoopbackHost(host)) {
+      loopbackCount++;
+      findings.push({
+        ruleId: "EGL014",
+        plane: "egress",
+        severity: "INFO",
+        file: sourceFile,
+        detail: `Loopback HTTP request to ${host}${parsed.port ? ":" + parsed.port : ""} separated from external egress`,
+        evidence: redactSensitive(cleanUrl.slice(0, 160))
+      });
+      continue;
+    }
+
+    externalDomains.push(host);
+
+    const urlEmails = [...cleanUrl.matchAll(EMAIL_RE)].map((m) => `${m[1]}@${m[2]}`).filter((e) => !isSyntheticEmail(e));
+    if (urlEmails.length > 0 || /[?&](?:authuser|email|user_email|contact)=([^&]+)/i.test(cleanUrl)) {
+      findings.push({
+        ruleId: "EGL008",
+        plane: "egress",
+        severity: "CRITICAL",
+        file: sourceFile,
+        detail: `Outbound URL to ${host} leaks email/identity in query parameters (${redactSensitive(cleanUrl)})`,
+        evidence: redactSensitive(cleanUrl.slice(0, 200))
+      });
+    }
+
+    findings.push({
+      ruleId: "EGL011",
+      plane: "egress",
+      severity: "HIGH",
+      file: sourceFile,
+      detail: `External outbound request to ${host} via ${toolName}`,
+      evidence: redactSensitive(cleanUrl.slice(0, 180))
+    });
   }
 
-  const score = Math.max(0, Math.min(100, 100 - penalty));
-  let grade = "A";
-  if (score < 45) grade = "F";
-  else if (score < 60) grade = "D";
-  else if (score < 75) grade = "C";
-  else if (score < 90) grade = "B";
-
-  return { score, grade, ruleCounts, severityCounts };
+  return { findings, externalDomains, loopbackCount };
 }
