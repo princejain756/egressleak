@@ -37,6 +37,18 @@ export const RULE_META = {
     severity: "CRITICAL",
     title: "Email or Personal Identifier Leaked in Outbound URL Query / Payload"
   },
+  EGL009: {
+    id: "EGL009",
+    plane: "egress",
+    severity: "CRITICAL",
+    title: "Bearer Token, API Key, or Secret Passed in Outbound HTTP Request"
+  },
+  EGL010: {
+    id: "EGL010",
+    plane: "egress",
+    severity: "HIGH",
+    title: "Local File or Environment Variable Exfiltrated via Outbound HTTP POST"
+  },
   EGL011: {
     id: "EGL011",
     plane: "egress",
@@ -94,6 +106,7 @@ export function redactSensitive(input) {
 const EMAIL_RE =
   /\b([a-zA-Z0-9._%+-]{1,40})@([a-zA-Z0-9.-]{1,40}\.(?:com|org|net|io|dev|ai|co|in|edu|gov|sh|app|me|uk|de|fr|jp))\b/gi;
 const URL_RE = /https?:\/\/[a-zA-Z0-9._~:/?#\[\]@!$&()*+,;=%-]+/gi;
+const SECRET_TOKEN_RE = /\b(sk-[a-zA-Z0-9_-]{12,}|ghp_[a-zA-Z0-9]{16,}|AIza[0-9A-Za-z-_]{20,}|xox[baprs]-[a-zA-Z0-9-]{12,})\b/;
 
 function realEmailsIn(text) {
   return [...text.matchAll(EMAIL_RE)].map((m) => `${m[1]}@${m[2]}`).filter((e) => !isSyntheticEmail(e));
@@ -265,6 +278,18 @@ export function analyzeOutboundCall({ toolName, rawInput, sourceFile }) {
       });
     }
 
+    // Check if URL query leaks a token/key
+    if (/[?&](?:api_key|apikey|token|access_token|secret|key)=(?:[a-zA-Z0-9._-]{8,})/i.test(cleanUrl)) {
+      findings.push({
+        ruleId: "EGL009",
+        plane: "egress",
+        severity: "CRITICAL",
+        file: sourceFile,
+        detail: `Outbound URL to ${host} passes API key or token in query string`,
+        evidence: redactSensitive(cleanUrl.slice(0, 200))
+      });
+    }
+
     findings.push({
       ruleId: "EGL011",
       plane: "egress",
@@ -272,6 +297,37 @@ export function analyzeOutboundCall({ toolName, rawInput, sourceFile }) {
       file: sourceFile,
       detail: `External outbound request to ${host} via ${toolName}`,
       evidence: redactSensitive(cleanUrl.slice(0, 180))
+    });
+  }
+
+  if (
+    /Authorization\s*:\s*Bearer\s+[^\s"']+/i.test(text) ||
+    /x-api-key\s*:\s*[^\s"']+/i.test(text) ||
+    SECRET_TOKEN_RE.test(text)
+  ) {
+    if (/\b(curl|wget|fetch|http|https|requests\.)\b/i.test(text) || toolName === "WebFetch") {
+      findings.push({
+        ruleId: "EGL009",
+        plane: "egress",
+        severity: "CRITICAL",
+        file: sourceFile,
+        detail: `Outbound ${toolName} includes Authorization Bearer header or secret API token`,
+        evidence: redactSensitive(text.slice(0, 200))
+      });
+    }
+  }
+
+  if (
+    /\bcurl\b[^\n]*?\s(?:-d|--data|--data-binary|--data-raw|-F|--form)\s+(?:@|\$[A-Za-z_])/i.test(text) ||
+    /\bcurl\b[^\n]*?(?:\.env|id_rsa|credentials|\.claude\.json)/i.test(text)
+  ) {
+    findings.push({
+      ruleId: "EGL010",
+      plane: "egress",
+      severity: "HIGH",
+      file: sourceFile,
+      detail: `Outbound ${toolName} uploads local file or interpolated environment variable via HTTP POST`,
+      evidence: redactSensitive(text.slice(0, 200))
     });
   }
 
