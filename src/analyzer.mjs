@@ -7,77 +7,101 @@ export const RULE_META = {
     id: "EGL001",
     plane: "identity",
     severity: "CRITICAL",
-    title: "OAuth Account Email Auto-Injected into LLM Context (#55743 / #107757)"
+    title: "OAuth Account Email Auto-Injected into LLM Context (#55743 / #107757)",
+    points: 25
   },
   EGL002: {
     id: "EGL002",
     plane: "identity",
     severity: "HIGH",
-    title: "Hardware & Telemetry Tracking IDs Active Without Telemetry Opt-Out"
+    title: "Hardware & Telemetry Tracking IDs Active Without Telemetry Opt-Out",
+    points: 12
   },
   EGL003: {
     id: "EGL003",
     plane: "identity",
     severity: "HIGH",
-    title: "Remote SSH or Network-Tunneled MCP Server Configured"
+    title: "Remote SSH or Network-Tunneled MCP Server Configured",
+    points: 15
   },
   EGL004: {
     id: "EGL004",
     plane: "identity",
     severity: "MEDIUM",
-    title: "Personal Email or Phone Hardcoded in Global Agent Instructions / Git Config"
+    title: "Personal Email or Phone Hardcoded in Global Agent Instructions / Git Config",
+    points: 8
   },
   EGL005: {
     id: "EGL005",
     plane: "identity",
     severity: "MEDIUM",
-    title: "OS Username & Local Workspace Paths Exposed Across Session Contexts"
+    title: "OS Username & Local Workspace Paths Exposed Across Session Contexts",
+    points: 6
   },
   EGL006: {
     id: "EGL006",
     plane: "identity",
     severity: "LOW",
-    title: "Synthetic AI Trailer Emails Filtered from PII Count (False-Positive Guard)"
+    title: "Synthetic AI Trailer Emails Filtered from PII Count (False-Positive Guard)",
+    points: 0
   },
   EGL007: {
     id: "EGL007",
     plane: "egress",
     severity: "CRITICAL",
-    title: "Email or Operator Identity Sent in Outbound User-Agent / HTTP Header (#107757)"
+    title: "Email or Operator Identity Sent in Outbound User-Agent / HTTP Header (#107757)",
+    points: 30
   },
   EGL008: {
     id: "EGL008",
     plane: "egress",
     severity: "CRITICAL",
-    title: "Email or Personal Identifier Leaked in Outbound URL Query / Payload"
+    title: "Email or Personal Identifier Leaked in Outbound URL Query / Payload",
+    points: 25
   },
   EGL009: {
     id: "EGL009",
     plane: "egress",
     severity: "CRITICAL",
-    title: "Bearer Token, API Key, or Secret Passed in Outbound HTTP Request"
+    title: "Bearer Token, API Key, or Secret Passed in Outbound HTTP Request",
+    points: 30
   },
   EGL010: {
     id: "EGL010",
     plane: "egress",
     severity: "HIGH",
-    title: "Local File or Environment Variable Exfiltrated via Outbound HTTP POST"
+    title: "Local File or Environment Variable Exfiltrated via Outbound HTTP POST",
+    points: 20
   },
   EGL011: {
     id: "EGL011",
     plane: "egress",
     severity: "HIGH",
-    title: "External Third-Party Domain Contacted via Agent Tool Call"
+    title: "External Third-Party Domain Contacted via Agent Tool Call",
+    points: 8
+  },
+  EGL012: {
+    id: "EGL012",
+    plane: "egress",
+    severity: "MEDIUM",
+    title: "Sensitive Path, Email, or Internal Hostname in WebSearch Query",
+    points: 12
+  },
+  EGL013: {
+    id: "EGL013",
+    plane: "egress",
+    severity: "MEDIUM",
+    title: "Real Personal or Customer PII Persisted in Unencrypted Session Transcripts",
+    points: 10
   },
   EGL014: {
     id: "EGL014",
     plane: "egress",
     severity: "INFO",
-    title: "Loopback / Localhost Dev Request Separated from External Egress"
+    title: "Loopback / Localhost Dev Request Separated from External Egress",
+    points: 0
   }
 };
-
-const SEVERITY_PENALTY = { CRITICAL: 25, HIGH: 12, MEDIUM: 6, LOW: 2, INFO: 0 };
 
 const SYNTHETIC_EMAIL_DOMAINS = new Set([
   "anthropic.com",
@@ -345,6 +369,24 @@ export function analyzeOutboundCall({ toolName, rawInput, sourceFile }) {
     });
   }
 
+  if (toolName === "WebSearch" || /"query"\s*:/.test(text)) {
+    const queryEmails = realEmailsIn(text);
+    if (
+      queryEmails.length > 0 ||
+      /\/Users\/[a-zA-Z0-9._-]+|\/home\/[a-zA-Z0-9._-]+/.test(text) ||
+      SECRET_TOKEN_RE.test(text)
+    ) {
+      findings.push({
+        ruleId: "EGL012",
+        plane: "egress",
+        severity: "MEDIUM",
+        file: sourceFile,
+        detail: `Search query leaks email, local username path, or token to search provider`,
+        evidence: redactSensitive(text.slice(0, 200))
+      });
+    }
+  }
+
   return { findings, externalDomains, loopbackCount };
 }
 
@@ -382,7 +424,7 @@ export function scanTranscriptFile(filePath, seenCallIds = new Set()) {
       }
     }
 
-    if (!line.includes("tool_use")) continue;
+    if (!line.includes("tool_use") && !line.includes("function_call")) continue;
 
     let obj;
     try {
@@ -405,8 +447,28 @@ export function scanTranscriptFile(filePath, seenCallIds = new Set()) {
         toolName === "Bash" ||
         toolName === "WebFetch" ||
         toolName === "WebSearch" ||
+        toolName.startsWith("mcp__") ||
         rawInput.includes("http")
       ) {
+        const res = analyzeOutboundCall({ toolName, rawInput, sourceFile: filePath });
+        findings.push(...res.findings);
+        loopbackUrlCount += res.loopbackCount;
+        for (const d of res.externalDomains) {
+          externalDomains.set(d, (externalDomains.get(d) || 0) + 1);
+        }
+      }
+    }
+
+    // Codex CLI stores exec calls as response_item / function_call envelopes
+    if (obj?.type === "response_item" && obj?.payload?.type === "function_call") {
+      const id = obj.payload.call_id || `${filePath}:${deduplicatedToolCalls}`;
+      if (seenCallIds.has(id)) continue;
+      seenCallIds.add(id);
+      deduplicatedToolCalls++;
+
+      const toolName = String(obj.payload.name || "exec_command");
+      const rawInput = String(obj.payload.arguments || "").slice(0, 8000);
+      if (rawInput.includes("http") || /\b(curl|wget|fetch|User-Agent)\b/i.test(rawInput)) {
         const res = analyzeOutboundCall({ toolName, rawInput, sourceFile: filePath });
         findings.push(...res.findings);
         loopbackUrlCount += res.loopbackCount;
@@ -523,6 +585,22 @@ export function auditAgentEgress(options = {}) {
     });
   }
 
+  if (totalRealEmails > 0) {
+    const topDomains = [...realEmailDomains.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([d, c]) => `${d} (${c})`)
+      .join(", ");
+    allFindings.push({
+      ruleId: "EGL013",
+      plane: "egress",
+      severity: "MEDIUM",
+      file: "session-transcripts",
+      detail: `${totalRealEmails} real personal/third-party email occurrence(s) persisted across ${realEmailDomains.size} domains in plaintext transcripts`,
+      evidence: `Top domains: ${topDomains}`
+    });
+  }
+
   const summary = computeRiskSummary(allFindings);
 
   return {
@@ -547,7 +625,8 @@ export function auditAgentEgress(options = {}) {
   };
 }
 
-export function computeRiskSummary(findings) {  const ruleCounts = {};
+export function computeRiskSummary(findings) {
+  const ruleCounts = {};
   const severityCounts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0, INFO: 0 };
 
   for (const f of findings) {
@@ -555,10 +634,15 @@ export function computeRiskSummary(findings) {  const ruleCounts = {};
     if (severityCounts[f.severity] !== undefined) severityCounts[f.severity]++;
   }
 
-  let penalty = 0;
-  for (const [severity, count] of Object.entries(severityCounts)) {
-    penalty += Math.min(3, count) * (SEVERITY_PENALTY[severity] || 0);
+  let rawPenalty = 0;
+  for (const [ruleId, count] of Object.entries(ruleCounts)) {
+    const meta = RULE_META[ruleId];
+    if (!meta || meta.points === 0) continue;
+    // Cap per-rule penalty at 2x base points so high-volume logs stay proportional
+    const multiplier = Math.min(2.0, 1 + Math.log10(count) * 0.5);
+    rawPenalty += Math.round(meta.points * multiplier);
   }
+  const penalty = rawPenalty;
 
   const score = Math.max(0, Math.min(100, 100 - penalty));
   let grade = "A";
