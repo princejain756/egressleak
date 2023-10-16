@@ -3,12 +3,33 @@
   "version": "0.0.1",
   "description": "Audit outbound HTTP egress and context PII in local coding agent sessions.",
   "type": "module",
+  "bin": {
+    "egressleak": "./bin/egressleak.mjs"
+  },
   "main": "./src/analyzer.mjs",
+  "files": [
+    "bin/",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "test": "node --test tests/egressleak.test.mjs"
   },
+  "keywords": [
+    "claude-code",
+    "codex",
+    "mcp",
+    "privacy",
+    "egress",
+    "pii"
+  ],
+  "author": "Prince Jain <princejain756@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/princejain756/egressleak.git"
+  },
   "engines": {
     "node": ">=18.0.0"
-  },
-  "license": "MIT"
-}
+  }
