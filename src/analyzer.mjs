@@ -617,6 +617,7 @@ export function auditAgentEgress(options = {}) {
       externalDomainCount: externalDomains.size,
       externalEgressCalls: [...externalDomains.values()].reduce((a, b) => a + b, 0),
       loopbackCalls: totalLoopbackUrls,
+      topExternalDomains: [...externalDomains.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8),
       remoteMcpCount: staticResult.stats.remoteMcpCount,
       hasOauthEmail: staticResult.stats.hasOauthEmail,
       hasHardwareIds: staticResult.stats.hasHardwareIds
