@@ -526,7 +526,18 @@ export function auditAgentEgress(options = {}) {
   const claudeSettingsPath = options.claudeSettingsPath ?? defaults.claudeSettingsPath;
   const gitConfigPath = options.gitConfigPath ?? defaults.gitConfigPath;
   const instructionPaths = options.instructionPaths ?? defaults.instructionPaths;
-  const transcriptFiles = options.transcriptFiles ?? defaults.transcriptFiles;
+
+  let transcriptFiles = options.transcriptFiles;
+  if (!transcriptFiles) {
+    if (options.customDir) {
+      transcriptFiles = walkJsonl(options.customDir);
+    } else {
+      const customList = [];
+      if (options.claudeDir) walkJsonl(path.join(options.claudeDir, "projects"), customList);
+      if (options.codexDir) walkJsonl(path.join(options.codexDir, "sessions"), customList);
+      transcriptFiles = customList.length > 0 ? customList : defaults.transcriptFiles;
+    }
+  }
 
   const staticResult = scanStaticIdentitySurface({
     claudeJsonPath,
