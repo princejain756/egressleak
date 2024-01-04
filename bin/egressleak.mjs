@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { auditAgentEgress } from "../src/analyzer.mjs";
+import { RULE_META, auditAgentEgress } from "../src/analyzer.mjs";
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
@@ -18,6 +18,10 @@ Usage:
   npx egressleak [options]
 
 Options:
+  --claude-dir <path>      Custom ~/.claude directory path
+  --codex-dir <path>       Custom ~/.codex directory path
+  --claude-json <path>     Custom ~/.claude.json file path
+  --dir <path>             Scan a specific folder of .jsonl transcripts
   --json                   Output structured JSON report
   --fail-on <severity>     Exit 1 if findings >= severity (CRITICAL, HIGH, MEDIUM, LOW)
   -h, --help               Show help
@@ -26,13 +30,26 @@ Options:
 }
 
 function parseArgs(argv) {
-  const opts = { json: false, failOn: null, help: false, version: false };
+  const opts = {
+    claudeDir: null,
+    codexDir: null,
+    claudeJsonPath: undefined,
+    customDir: null,
+    json: false,
+    failOn: null,
+    help: false,
+    version: false
+  };
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-h" || a === "--help") opts.help = true;
     else if (a === "-v" || a === "--version") opts.version = true;
     else if (a === "--json") opts.json = true;
+    else if (a === "--claude-dir") opts.claudeDir = argv[++i];
+    else if (a === "--codex-dir") opts.codexDir = argv[++i];
+    else if (a === "--claude-json") opts.claudeJsonPath = argv[++i];
+    else if (a === "--dir") opts.customDir = argv[++i];
     else if (a === "--fail-on") opts.failOn = String(argv[++i] || "").toUpperCase();
   }
   return opts;
@@ -112,6 +129,23 @@ function renderReport(res) {
     `  * Synthetic AI Trailer Emails:      ${CYAN}${m.totalSyntheticEmails} filtered (noreply@anthropic.com / example.com)${RESET}`
   );
 
+  console.log(`\n${BOLD}Rule Breakdown:${RESET}`);
+  const sortedRules = Object.entries(res.ruleCounts).sort((a, b) => {
+    const order = { CRITICAL: 5, HIGH: 4, MEDIUM: 3, LOW: 2, INFO: 1 };
+    const ma = RULE_META[a[0]] || { severity: "INFO" };
+    const mb = RULE_META[b[0]] || { severity: "INFO" };
+    return (order[mb.severity] || 0) - (order[ma.severity] || 0) || b[1] - a[1];
+  });
+
+  for (const [ruleId, count] of sortedRules) {
+    const meta = RULE_META[ruleId];
+    if (!meta) continue;
+    const col = severityColor(meta.severity);
+    console.log(
+      `  ${col}[${meta.severity.padEnd(8)}]${RESET} ${BOLD}${ruleId}${RESET} (${String(count).padStart(2)}x) ${meta.title}`
+    );
+  }
+
   const notable = [
     ...res.findings.filter((f) => f.severity === "CRITICAL"),
     ...res.findings.filter((f) => f.severity === "HIGH")
@@ -138,7 +172,12 @@ function main() {
     process.exit(0);
   }
 
-  const result = auditAgentEgress({});
+  const result = auditAgentEgress({
+    claudeDir: opts.claudeDir,
+    codexDir: opts.codexDir,
+    claudeJsonPath: opts.claudeJsonPath,
+    customDir: opts.customDir
+  });
 
   if (opts.json) {
     console.log(JSON.stringify(result, null, 2));
