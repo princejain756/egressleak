@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { RULE_META, auditAgentEgress } from "../src/analyzer.mjs";
+import { RULE_META, auditAgentEgress, generatePreToolUseHook } from "../src/analyzer.mjs";
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
@@ -22,6 +22,7 @@ Options:
   --codex-dir <path>       Custom ~/.codex directory path
   --claude-json <path>     Custom ~/.claude.json file path
   --dir <path>             Scan a specific folder of .jsonl transcripts
+  --emit-hook              Output deterministic PreToolUse guardrail hook + settings.json
   --json                   Output structured JSON report
   --fail-on <severity>     Exit 1 if findings >= severity (CRITICAL, HIGH, MEDIUM, LOW)
   -h, --help               Show help
@@ -35,6 +36,7 @@ function parseArgs(argv) {
     codexDir: null,
     claudeJsonPath: undefined,
     customDir: null,
+    emitHook: false,
     json: false,
     failOn: null,
     help: false,
@@ -46,6 +48,7 @@ function parseArgs(argv) {
     if (a === "-h" || a === "--help") opts.help = true;
     else if (a === "-v" || a === "--version") opts.version = true;
     else if (a === "--json") opts.json = true;
+    else if (a === "--emit-hook") opts.emitHook = true;
     else if (a === "--claude-dir") opts.claudeDir = argv[++i];
     else if (a === "--codex-dir") opts.codexDir = argv[++i];
     else if (a === "--claude-json") opts.claudeJsonPath = argv[++i];
@@ -169,6 +172,19 @@ function main() {
   }
   if (opts.version) {
     console.log("0.0.1");
+    process.exit(0);
+  }
+
+  if (opts.emitHook) {
+    const { hookScript, settingsSnippet } = generatePreToolUseHook();
+    if (opts.json) {
+      console.log(JSON.stringify({ hookScript, settingsSnippet }, null, 2));
+    } else {
+      console.log(`${BOLD}${CYAN}# 1. Save to ~/.claude/hooks/egress-guard-hook.mjs:${RESET}\n`);
+      console.log(hookScript);
+      console.log(`${BOLD}${CYAN}# 2. Merge into ~/.claude/settings.json:${RESET}\n`);
+      console.log(JSON.stringify(settingsSnippet, null, 2));
+    }
     process.exit(0);
   }
 
