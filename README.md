@@ -25,6 +25,21 @@ Machine-readable output:
 npx egressleak --json
 ```
 
+## Guardrail hook
+
+An audit tells you what already leaked. To stop the next leak, emit a deterministic
+`PreToolUse` hook that blocks the call before it runs:
+
+```bash
+npx egressleak --emit-hook
+```
+
+The command prints the hook script and the matching `~/.claude/settings.json` fragment
+(telemetry opt-out plus the `Bash|WebFetch|WebSearch` matcher). Save the script to
+`~/.claude/hooks/egress-guard-hook.mjs` and merge the settings block. The hook exits `2`
+with a `BLOCKED` message on a `User-Agent` email, an email in a query string, or a secret
+token in an outbound request, and exits `0` on everything else so it never stalls work.
+
 ## What it looks at
 
 - `~/.claude.json` — `oauthAccount.emailAddress`, telemetry IDs, remote MCP servers
@@ -52,10 +67,3 @@ Nothing is written and no network requests are made.
 | `EGL014` | `INFO` | Loopback requests, separated from external egress |
 
 ## Redaction
-
-Emails print as `<REDACTED_EMAIL>@gmail.com`, keys as `<REDACTED_TOKEN>`, public IPs as
-`<REDACTED_IP>`, and home paths as `/Users/<USER>`. Loopback addresses stay readable.
-
-## License
-
-MIT
