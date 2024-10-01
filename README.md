@@ -67,3 +67,10 @@ Nothing is written and no network requests are made.
 | `EGL014` | `INFO` | Loopback requests, separated from external egress |
 
 ## Redaction
+
+Emails print as `<REDACTED_EMAIL>@gmail.com`, keys as `<REDACTED_TOKEN>`, public IPs as
+`<REDACTED_IP>`, and home paths as `/Users/<USER>`. Loopback addresses stay readable.
+
+## License
+
+MIT
