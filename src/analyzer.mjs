@@ -719,3 +719,96 @@ export function computeRiskSummary(findings) {
 
   return { score, grade, ruleCounts, severityCounts };
 }
+
+export function getDemoResult() {
+  return {
+    sessionsScanned: 153,
+    deduplicatedToolCalls: 1928,
+    score: 0,
+    grade: "F",
+    severityCounts: {
+      CRITICAL: 2,
+      HIGH: 16,
+      MEDIUM: 3,
+      LOW: 1,
+      INFO: 19
+    },
+    ruleCounts: {
+      EGL002: 1,
+      EGL003: 3,
+      EGL004: 1,
+      EGL005: 1,
+      EGL006: 1,
+      EGL008: 2,
+      EGL010: 1,
+      EGL011: 11,
+      EGL013: 1,
+      EGL014: 19
+    },
+    metrics: {
+      sessionsWithHomePath: 153,
+      totalRealEmails: 77,
+      totalSyntheticEmails: 259,
+      externalDomainCount: 2,
+      externalEgressCalls: 11,
+      loopbackCalls: 19,
+      topExternalDomains: [
+        ["q.prince.sh", 9],
+        ["gemini.google.com", 2]
+      ],
+      remoteMcpCount: 3,
+      hasOauthEmail: false,
+      hasHardwareIds: true
+    },
+    findings: [
+      {
+        ruleId: "EGL008",
+        plane: "egress",
+        severity: "CRITICAL",
+        file: "~/.claude/projects/session-14a.jsonl",
+        detail: "Outbound URL to gemini.google.com leaks email/identity in query parameters (https://gemini.google.com/app?authuser=<REDACTED_EMAIL>@gmail.com)",
+        evidence: "https://gemini.google.com/app?authuser=<REDACTED_EMAIL>@gmail.com"
+      },
+      {
+        ruleId: "EGL010",
+        plane: "egress",
+        severity: "HIGH",
+        file: "~/.claude/projects/session-08c.jsonl",
+        detail: "Outbound Bash uploads local file or interpolated environment variable via HTTP POST",
+        evidence: "curl -s -X POST -d @$TMP_PAYLOAD https://q.prince.sh/api/ingest"
+      },
+      {
+        ruleId: "EGL003",
+        plane: "identity",
+        severity: "HIGH",
+        file: "~/.claude.json",
+        detail: "Remote MCP server \"server-31-97-202\" transmits tool arguments over SSH or network (ssh root@<REDACTED_IP> npx -y @modelcontextprotocol/server-filesystem /root /opt)",
+        evidence: "server-31-97-202: ssh root@<REDACTED_IP> npx -y @modelcontextprotocol/server-filesystem /root /opt"
+      },
+      {
+        ruleId: "EGL002",
+        plane: "identity",
+        severity: "HIGH",
+        file: "~/.claude.json",
+        detail: "Persistent tracking identifiers (userID, machineID, cachedStatsigGates, cachedGrowthBookFeatures) active in ~/.claude.json without DISABLE_TELEMETRY=1 or CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+        evidence: "Active keys: userID, machineID, cachedStatsigGates, cachedGrowthBookFeatures"
+      },
+      {
+        ruleId: "EGL011",
+        plane: "egress",
+        severity: "HIGH",
+        file: "~/.codex/sessions/rollout-09b.jsonl",
+        detail: "External outbound request to q.prince.sh via Bash (9 calls)",
+        evidence: "curl -s https://q.prince.sh/api/health"
+      },
+      {
+        ruleId: "EGL013",
+        plane: "egress",
+        severity: "MEDIUM",
+        file: "session-transcripts",
+        detail: "77 real personal/third-party email occurrence(s) persisted across 8 domains in plaintext transcripts",
+        evidence: "Top domains: gmail.com (53), mcxindia.com (11), prince.sh (4), adelev8.com (4)"
+      }
+    ]
+  };
+}
