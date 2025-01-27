@@ -1,5 +1,10 @@
 #!/usr/bin/env node
-import { RULE_META, auditAgentEgress, generatePreToolUseHook } from "../src/analyzer.mjs";
+import {
+  RULE_META,
+  auditAgentEgress,
+  generatePreToolUseHook,
+  getDemoResult
+} from "../src/analyzer.mjs";
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
@@ -12,7 +17,7 @@ const MAGENTA = "\x1b[35m";
 
 function printHelp() {
   console.log(`
-${BOLD}egressleak${RESET} v0.0.1 - Agent Outbound Egress & Context PII Auditor
+${BOLD}egressleak${RESET} v0.1.0 - Agent Outbound Egress, User-Agent Email & Context PII Auditor
 
 Usage:
   npx egressleak [options]
@@ -25,6 +30,7 @@ Options:
   --emit-hook              Output deterministic PreToolUse guardrail hook + settings.json
   --json                   Output structured JSON report
   --fail-on <severity>     Exit 1 if findings >= severity (CRITICAL, HIGH, MEDIUM, LOW)
+  --demo                   Render benchmarked 153-session corpus audit output
   -h, --help               Show help
   -v, --version            Show version
 `);
@@ -39,6 +45,7 @@ function parseArgs(argv) {
     emitHook: false,
     json: false,
     failOn: null,
+    demo: false,
     help: false,
     version: false
   };
@@ -47,6 +54,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a === "-h" || a === "--help") opts.help = true;
     else if (a === "-v" || a === "--version") opts.version = true;
+    else if (a === "--demo") opts.demo = true;
     else if (a === "--json") opts.json = true;
     else if (a === "--emit-hook") opts.emitHook = true;
     else if (a === "--claude-dir") opts.claudeDir = argv[++i];
@@ -70,7 +78,7 @@ function renderReport(res) {
   const gradeColor =
     res.grade === "A" ? GREEN : res.grade === "B" ? CYAN : res.grade === "C" ? YELLOW : RED;
 
-  console.log(`\n${BOLD}${CYAN}egressleak${RESET} ${DIM}| Agent Outbound Egress & Context PII Audit${RESET}`);
+  console.log(`\n${BOLD}${CYAN}egressleak v0.1.0${RESET} ${DIM}| Agent Outbound Egress & Context PII Audit${RESET}`);
   console.log(`${DIM}${"=".repeat(74)}${RESET}`);
   console.log(
     `Sessions Scanned: ${BOLD}${res.sessionsScanned}${RESET}   ` +
@@ -171,7 +179,7 @@ function main() {
     process.exit(0);
   }
   if (opts.version) {
-    console.log("0.0.1");
+    console.log("0.1.0");
     process.exit(0);
   }
 
@@ -188,12 +196,14 @@ function main() {
     process.exit(0);
   }
 
-  const result = auditAgentEgress({
-    claudeDir: opts.claudeDir,
-    codexDir: opts.codexDir,
-    claudeJsonPath: opts.claudeJsonPath,
-    customDir: opts.customDir
-  });
+  const result = opts.demo
+    ? getDemoResult()
+    : auditAgentEgress({
+        claudeDir: opts.claudeDir,
+        codexDir: opts.codexDir,
+        claudeJsonPath: opts.claudeJsonPath,
+        customDir: opts.customDir
+      });
 
   if (opts.json) {
     console.log(JSON.stringify(result, null, 2));
