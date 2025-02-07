@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 
 export const RULE_META = {
+  // Plane 1: Static Identity, Telemetry & Tunnel Surface
   EGL001: {
     id: "EGL001",
     plane: "identity",
@@ -45,6 +46,8 @@ export const RULE_META = {
     title: "Synthetic AI Trailer Emails Filtered from PII Count (False-Positive Guard)",
     points: 0
   },
+
+  // Plane 2: Outbound Egress & Identity Leak Replay
   EGL007: {
     id: "EGL007",
     plane: "egress",
@@ -107,10 +110,24 @@ const SYNTHETIC_EMAIL_DOMAINS = new Set([
   "anthropic.com",
   "example.com",
   "example.org",
-  "example.net"
+  "example.net",
+  "acme.com",
+  "test.com",
+  "localhost",
+  "users.noreply.github.com"
 ]);
 
-const SYNTHETIC_LOCAL_PARTS = new Set(["noreply", "no-reply", "donotreply", "test", "user", "admin"]);
+const SYNTHETIC_LOCAL_PARTS = new Set([
+  "noreply",
+  "no-reply",
+  "donotreply",
+  "test",
+  "user",
+  "foo",
+  "bar",
+  "admin",
+  "support"
+]);
 
 export function isSyntheticEmail(email) {
   const clean = String(email || "").trim().toLowerCase();
@@ -118,13 +135,24 @@ export function isSyntheticEmail(email) {
   if (parts.length !== 2) return true;
   const [local, domain] = parts;
   if (SYNTHETIC_EMAIL_DOMAINS.has(domain)) return true;
-  if (SYNTHETIC_LOCAL_PARTS.has(local)) return true;
+  if (domain.endsWith(".example.com") || domain.endsWith(".test")) return true;
+  if (local === "noreply" || local === "no-reply") return true;
+  if (SYNTHETIC_LOCAL_PARTS.has(local) && (domain === "domain.com" || domain === "company.com" || domain === "email.com")) {
+    return true;
+  }
   return false;
 }
 
 export function isLoopbackHost(hostname) {
   const h = String(hostname || "").trim().toLowerCase();
-  return h === "localhost" || h === "127.0.0.1" || h === "0.0.0.0" || h === "::1" || h === "[::1]";
+  return (
+    h === "localhost" ||
+    h === "127.0.0.1" ||
+    h === "0.0.0.0" ||
+    h === "::1" ||
+    h === "[::1]" ||
+    h.endsWith(".localhost")
+  );
 }
 
 export function redactSensitive(input) {
@@ -134,23 +162,24 @@ export function redactSensitive(input) {
       if (isSyntheticEmail(`${local}@${dom}`)) return `${local}@${dom}`;
       return `<REDACTED_EMAIL>@${dom.toLowerCase()}`;
     })
-    .replace(/\b(sk-[a-zA-Z0-9_-]{8,}|ghp_[a-zA-Z0-9]{10,}|AIza[0-9A-Za-z-_]{12,})\b/g, "<REDACTED_TOKEN>")
+    .replace(/\b(sk-[a-zA-Z0-9_-]{8,}|ghp_[a-zA-Z0-9]{10,}|AIza[0-9A-Za-z-_]{12,}|xox[baprs]-[a-zA-Z0-9-]{10,})\b/g, "<REDACTED_TOKEN>")
     .replace(/(Bearer\s+)[A-Za-z0-9._~+/-]+=*/gi, "$1<REDACTED_TOKEN>")
     .replace(/\b(?!127\.0\.0\.1\b|0\.0\.0\.0\b)(?:\d{1,3}\.){3}\d{1,3}\b/g, "<REDACTED_IP>")
+    .replace(/(?:\+\d{1,3}[-.\s]?)?\b\d{3}[-.\s]?\d{3,4}[-.\s]?\d{4}\b/g, "<REDACTED_PHONE>")
     .replace(/\/Users\/[a-zA-Z0-9._-]+/g, "/Users/<USER>")
     .replace(/\/home\/[a-zA-Z0-9._-]+/g, "/home/<USER>");
 }
 
-const EMAIL_RE =
-  /\b([a-zA-Z0-9._%+-]{1,40})@([a-zA-Z0-9.-]{1,40}\.(?:com|org|net|io|dev|ai|co|in|edu|gov|sh|app|me|uk|de|fr|jp))\b/gi;
+const EMAIL_RE = /\b([a-zA-Z0-9._%+-]{1,40})@([a-zA-Z0-9.-]{1,40}\.(?:com|org|net|io|dev|ai|co|in|edu|gov|sh|app|me|uk|de|fr|jp))\b/gi;
 const URL_RE = /https?:\/\/[a-zA-Z0-9._~:/?#\[\]@!$&()*+,;=%-]+/gi;
 const SECRET_TOKEN_RE = /\b(sk-[a-zA-Z0-9_-]{12,}|ghp_[a-zA-Z0-9]{16,}|AIza[0-9A-Za-z-_]{20,}|xox[baprs]-[a-zA-Z0-9-]{12,})\b/;
 
-function realEmailsIn(text) {
-  return [...text.matchAll(EMAIL_RE)].map((m) => `${m[1]}@${m[2]}`).filter((e) => !isSyntheticEmail(e));
-}
-
-export function scanStaticIdentitySurface({ claudeJsonPath, claudeSettingsPath, gitConfigPath, instructionPaths = [] }) {
+export function scanStaticIdentitySurface({
+  claudeJsonPath,
+  claudeSettingsPath,
+  gitConfigPath,
+  instructionPaths = []
+}) {
   const findings = [];
   const stats = {
     hasOauthEmail: false,
@@ -160,11 +189,16 @@ export function scanStaticIdentitySurface({ claudeJsonPath, claudeSettingsPath, 
     instructionEmailCount: 0
   };
 
+  let settingsObj = null;
   if (claudeSettingsPath && fs.existsSync(claudeSettingsPath)) {
     try {
-      const settingsObj = JSON.parse(fs.readFileSync(claudeSettingsPath, "utf8"));
+      settingsObj = JSON.parse(fs.readFileSync(claudeSettingsPath, "utf8"));
       const env = settingsObj?.env || {};
-      if (env.DISABLE_TELEMETRY === "1" || env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC === "1") {
+      if (
+        env.DISABLE_TELEMETRY === "1" ||
+        env.DISABLE_TELEMETRY === "true" ||
+        env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC === "1"
+      ) {
         stats.telemetryDisabled = true;
       }
     } catch {
@@ -193,17 +227,20 @@ export function scanStaticIdentitySurface({ claudeJsonPath, claudeSettingsPath, 
         const idParts = [];
         if (cj.userID) idParts.push("userID");
         if (cj.machineID) idParts.push("machineID");
+        if (cj.cachedStatsigGates) idParts.push("cachedStatsigGates");
+        if (cj.cachedGrowthBookFeatures) idParts.push("cachedGrowthBookFeatures");
         findings.push({
           ruleId: "EGL002",
           plane: "identity",
           severity: "HIGH",
           file: claudeJsonPath,
-          detail: `Persistent tracking identifiers (${idParts.join(", ")}) active in ~/.claude.json without DISABLE_TELEMETRY=1`,
+          detail: `Persistent tracking identifiers (${idParts.join(", ")}) active in ~/.claude.json without DISABLE_TELEMETRY=1 or CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`,
           evidence: `Active keys: ${idParts.join(", ")}`
         });
       }
 
-      for (const [name, cfg] of Object.entries(cj?.mcpServers || {})) {
+      const mcpServers = cj?.mcpServers || {};
+      for (const [name, cfg] of Object.entries(mcpServers)) {
         const cmd = String(cfg?.command || "");
         const args = Array.isArray(cfg?.args) ? cfg.args.map(String) : [];
         const url = String(cfg?.url || "");
@@ -221,17 +258,23 @@ export function scanStaticIdentitySurface({ claudeJsonPath, claudeSettingsPath, 
         }
       }
     } catch {
-      // ignore unreadable state
+      // ignore
     }
   }
 
   const allInstructionFiles = [...instructionPaths];
-  if (gitConfigPath && fs.existsSync(gitConfigPath)) allInstructionFiles.push(gitConfigPath);
+  if (gitConfigPath && fs.existsSync(gitConfigPath)) {
+    allInstructionFiles.push(gitConfigPath);
+  }
 
   for (const p of allInstructionFiles) {
     if (!p || !fs.existsSync(p)) continue;
     try {
-      const realEmails = realEmailsIn(fs.readFileSync(p, "utf8"));
+      const content = fs.readFileSync(p, "utf8");
+      const matches = [...content.matchAll(EMAIL_RE)];
+      const realEmails = matches
+        .map((m) => `${m[1]}@${m[2]}`)
+        .filter((e) => !isSyntheticEmail(e));
       if (realEmails.length > 0) {
         stats.instructionEmailCount += realEmails.length;
         const uniqueRedacted = [...new Set(realEmails.map((e) => redactSensitive(e)))];
@@ -245,7 +288,7 @@ export function scanStaticIdentitySurface({ claudeJsonPath, claudeSettingsPath, 
         });
       }
     } catch {
-      // ignore unreadable instruction file
+      // ignore
     }
   }
 
@@ -260,13 +303,16 @@ export function analyzeOutboundCall({ toolName, rawInput, sourceFile }) {
   const text = String(rawInput || "");
   if (!text) return { findings, externalDomains, loopbackCount };
 
+  // 1. Check for User-Agent header with email or operator identity (#107757)
   const hasUserAgentFlag =
     /User-Agent\s*[:=]/i.test(text) ||
     /\bcurl\b[^\n]*?\s(?:-A|--user-agent)\s+/i.test(text) ||
     /headers\s*=\s*\{[^}]*['"]User-Agent['"]/i.test(text);
 
   if (hasUserAgentFlag) {
-    const emails = realEmailsIn(text);
+    const emails = [...text.matchAll(EMAIL_RE)]
+      .map((m) => `${m[1]}@${m[2]}`)
+      .filter((e) => !isSyntheticEmail(e));
     if (emails.length > 0) {
       findings.push({
         ruleId: "EGL007",
@@ -279,7 +325,9 @@ export function analyzeOutboundCall({ toolName, rawInput, sourceFile }) {
     }
   }
 
-  for (const rawUrl of text.match(URL_RE) || []) {
+  // 2. Extract URLs and inspect query params & domains
+  const rawUrls = text.match(URL_RE) || [];
+  for (const rawUrl of rawUrls) {
     const cleanUrl = rawUrl.replace(/[\\"')\]}>.,;]+$/, "");
     let parsed;
     try {
@@ -304,7 +352,10 @@ export function analyzeOutboundCall({ toolName, rawInput, sourceFile }) {
 
     externalDomains.push(host);
 
-    const urlEmails = [...cleanUrl.matchAll(EMAIL_RE)].map((m) => `${m[1]}@${m[2]}`).filter((e) => !isSyntheticEmail(e));
+    // Check if URL query string or userinfo leaks an email address
+    const urlEmails = [...cleanUrl.matchAll(EMAIL_RE)]
+      .map((m) => `${m[1]}@${m[2]}`)
+      .filter((e) => !isSyntheticEmail(e));
     if (urlEmails.length > 0 || /[?&](?:authuser|email|user_email|contact)=([^&]+)/i.test(cleanUrl)) {
       findings.push({
         ruleId: "EGL008",
@@ -338,6 +389,7 @@ export function analyzeOutboundCall({ toolName, rawInput, sourceFile }) {
     });
   }
 
+  // 3. Check for Bearer tokens / API keys in headers
   if (
     /Authorization\s*:\s*Bearer\s+[^\s"']+/i.test(text) ||
     /x-api-key\s*:\s*[^\s"']+/i.test(text) ||
@@ -355,6 +407,7 @@ export function analyzeOutboundCall({ toolName, rawInput, sourceFile }) {
     }
   }
 
+  // 4. Check for file upload / env exfiltration in curl/wget
   if (
     /\bcurl\b[^\n]*?\s(?:-d|--data|--data-binary|--data-raw|-F|--form)\s+(?:@|\$[A-Za-z_])/i.test(text) ||
     /\bcurl\b[^\n]*?(?:\.env|id_rsa|credentials|\.claude\.json)/i.test(text)
@@ -369,13 +422,12 @@ export function analyzeOutboundCall({ toolName, rawInput, sourceFile }) {
     });
   }
 
+  // 5. Check WebSearch query leakage
   if (toolName === "WebSearch" || /"query"\s*:/.test(text)) {
-    const queryEmails = realEmailsIn(text);
-    if (
-      queryEmails.length > 0 ||
-      /\/Users\/[a-zA-Z0-9._-]+|\/home\/[a-zA-Z0-9._-]+/.test(text) ||
-      SECRET_TOKEN_RE.test(text)
-    ) {
+    const queryEmails = [...text.matchAll(EMAIL_RE)]
+      .map((m) => `${m[1]}@${m[2]}`)
+      .filter((e) => !isSyntheticEmail(e));
+    if (queryEmails.length > 0 || /\/Users\/[a-zA-Z0-9._-]+|\/home\/[a-zA-Z0-9._-]+/.test(text) || SECRET_TOKEN_RE.test(text)) {
       findings.push({
         ruleId: "EGL012",
         plane: "egress",
@@ -399,19 +451,25 @@ export function scanTranscriptFile(filePath, seenCallIds = new Set()) {
   let loopbackUrlCount = 0;
   let deduplicatedToolCalls = 0;
   let hasHomePathExposure = false;
+  let hasSystemReminder = false;
 
   const content = fs.readFileSync(filePath, "utf8");
+  const lines = content.split("\n");
 
-  for (const line of content.split("\n")) {
+  for (const line of lines) {
     if (!line.trim()) continue;
 
-    // Context / PII pass runs on every ordinary line, skipping huge base64 blobs
+    // Fast path for context / PII scanning on non-base64 lines (<100KB)
     if (line.length < 100000) {
       if (!hasHomePathExposure && (/\/Users\/[a-zA-Z0-9._-]+/.test(line) || /\/home\/[a-zA-Z0-9._-]+/.test(line))) {
         hasHomePathExposure = true;
       }
+      if (!hasSystemReminder && (line.includes("<system-reminder>") || line.includes("<environment_context>"))) {
+        hasSystemReminder = true;
+      }
       if (line.includes("@")) {
-        for (const m of line.matchAll(EMAIL_RE)) {
+        const matches = [...line.matchAll(EMAIL_RE)];
+        for (const m of matches) {
           const full = `${m[1]}@${m[2]}`;
           const dom = m[2].toLowerCase();
           if (isSyntheticEmail(full)) {
@@ -433,33 +491,38 @@ export function scanTranscriptFile(filePath, seenCallIds = new Set()) {
       continue;
     }
 
-    // Streaming writers repeat the same tool_use.id across rows, so dedupe on it
-    for (const item of obj?.message?.content || []) {
-      if (item?.type !== "tool_use") continue;
-      const id = item.id || `${filePath}:${deduplicatedToolCalls}`;
-      if (seenCallIds.has(id)) continue;
-      seenCallIds.add(id);
-      deduplicatedToolCalls++;
+    // Claude Code tool_use blocks
+    const msgContent = obj?.message?.content;
+    if (Array.isArray(msgContent)) {
+      for (const item of msgContent) {
+        if (item?.type === "tool_use") {
+          const id = item.id || `${filePath}:${deduplicatedToolCalls}`;
+          if (seenCallIds.has(id)) continue;
+          seenCallIds.add(id);
+          deduplicatedToolCalls++;
 
-      const toolName = String(item.name || "unknown");
-      const rawInput = JSON.stringify(item.input || {}).slice(0, 8000);
-      if (
-        toolName === "Bash" ||
-        toolName === "WebFetch" ||
-        toolName === "WebSearch" ||
-        toolName.startsWith("mcp__") ||
-        rawInput.includes("http")
-      ) {
-        const res = analyzeOutboundCall({ toolName, rawInput, sourceFile: filePath });
-        findings.push(...res.findings);
-        loopbackUrlCount += res.loopbackCount;
-        for (const d of res.externalDomains) {
-          externalDomains.set(d, (externalDomains.get(d) || 0) + 1);
+          const toolName = String(item.name || "unknown");
+          const rawInput = JSON.stringify(item.input || {}).slice(0, 8000);
+          if (
+            toolName === "Bash" ||
+            toolName === "WebFetch" ||
+            toolName === "WebSearch" ||
+            toolName === "js" ||
+            toolName.startsWith("mcp__") ||
+            rawInput.includes("http")
+          ) {
+            const res = analyzeOutboundCall({ toolName, rawInput, sourceFile: filePath });
+            findings.push(...res.findings);
+            loopbackUrlCount += res.loopbackCount;
+            for (const d of res.externalDomains) {
+              externalDomains.set(d, (externalDomains.get(d) || 0) + 1);
+            }
+          }
         }
       }
     }
 
-    // Codex CLI stores exec calls as response_item / function_call envelopes
+    // Codex CLI function_call blocks
     if (obj?.type === "response_item" && obj?.payload?.type === "function_call") {
       const id = obj.payload.call_id || `${filePath}:${deduplicatedToolCalls}`;
       if (seenCallIds.has(id)) continue;
@@ -487,7 +550,8 @@ export function scanTranscriptFile(filePath, seenCallIds = new Set()) {
     realEmailCount,
     loopbackUrlCount,
     deduplicatedToolCalls,
-    hasHomePathExposure
+    hasHomePathExposure,
+    hasSystemReminder
   };
 }
 
@@ -508,14 +572,45 @@ export function discoverDefaultTargets(homeDir = os.homedir()) {
     claudeJsonPath: path.join(homeDir, ".claude.json"),
     claudeSettingsPath: path.join(claudeDir, "settings.json"),
     gitConfigPath: path.join(homeDir, ".gitconfig"),
-    instructionPaths: [path.join(claudeDir, "CLAUDE.md"), path.join(homeDir, ".agents", "AGENTS.md")].filter((p) =>
-      fs.existsSync(p)
-    ),
+    instructionPaths: [
+      path.join(claudeDir, "CLAUDE.md"),
+      path.join(homeDir, ".agents", "AGENTS.md")
+    ].filter((p) => fs.existsSync(p)),
     transcriptFiles: [
       ...walkJsonl(path.join(claudeDir, "projects")),
       ...walkJsonl(path.join(codexDir, "sessions"))
     ]
   };
+}
+
+export function computeRiskSummary(findings) {
+  const ruleCounts = {};
+  const severityCounts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0, INFO: 0 };
+
+  for (const f of findings) {
+    ruleCounts[f.ruleId] = (ruleCounts[f.ruleId] || 0) + 1;
+    if (severityCounts[f.severity] !== undefined) {
+      severityCounts[f.severity]++;
+    }
+  }
+
+  let rawPenalty = 0;
+  for (const [ruleId, count] of Object.entries(ruleCounts)) {
+    const meta = RULE_META[ruleId];
+    if (!meta || meta.points === 0) continue;
+    // Cap per-rule penalty to 2x base points so high-volume logs stay proportional
+    const multiplier = Math.min(2.0, 1 + Math.log10(count) * 0.5);
+    rawPenalty += Math.round(meta.points * multiplier);
+  }
+
+  const score = Math.max(0, Math.min(100, 100 - rawPenalty));
+  let grade = "A";
+  if (score < 45) grade = "F";
+  else if (score < 60) grade = "D";
+  else if (score < 75) grade = "C";
+  else if (score < 90) grade = "B";
+
+  return { score, grade, ruleCounts, severityCounts };
 }
 
 export function auditAgentEgress(options = {}) {
@@ -556,6 +651,7 @@ export function auditAgentEgress(options = {}) {
   let totalLoopbackUrls = 0;
   let totalDeduplicatedCalls = 0;
   let sessionsWithHomePath = 0;
+  let sessionsWithRealEmail = 0;
 
   for (const tf of transcriptFiles) {
     const res = scanTranscriptFile(tf, seenCallIds);
@@ -565,6 +661,7 @@ export function auditAgentEgress(options = {}) {
     totalLoopbackUrls += res.loopbackUrlCount;
     totalDeduplicatedCalls += res.deduplicatedToolCalls;
     if (res.hasHomePathExposure) sessionsWithHomePath++;
+    if (res.realEmailCount > 0) sessionsWithRealEmail++;
 
     for (const [d, c] of res.externalDomains.entries()) {
       externalDomains.set(d, (externalDomains.get(d) || 0) + c);
@@ -607,7 +704,7 @@ export function auditAgentEgress(options = {}) {
       plane: "egress",
       severity: "MEDIUM",
       file: "session-transcripts",
-      detail: `${totalRealEmails} real personal/third-party email occurrence(s) persisted across ${realEmailDomains.size} domains in plaintext transcripts`,
+      detail: `${totalRealEmails} real personal/third-party email occurrence(s) across ${realEmailDomains.size} domains persisted in ${sessionsWithRealEmail} plaintext transcripts`,
       evidence: `Top domains: ${topDomains}`
     });
   }
@@ -623,8 +720,11 @@ export function auditAgentEgress(options = {}) {
     ruleCounts: summary.ruleCounts,
     metrics: {
       sessionsWithHomePath,
+      sessionsWithRealEmail,
       totalRealEmails,
       totalSyntheticEmails,
+      realEmailDomainCount: realEmailDomains.size,
+      topEmailDomains: [...realEmailDomains.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6),
       externalDomainCount: externalDomains.size,
       externalEgressCalls: [...externalDomains.values()].reduce((a, b) => a + b, 0),
       loopbackCalls: totalLoopbackUrls,
@@ -689,126 +789,4 @@ if (EMAIL_IN_UA.test(toolInput) || EMAIL_IN_URL.test(toolInput) || SECRET_IN_HTT
   };
 
   return { hookScript, settingsSnippet };
-}
-
-export function computeRiskSummary(findings) {
-  const ruleCounts = {};
-  const severityCounts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0, INFO: 0 };
-
-  for (const f of findings) {
-    ruleCounts[f.ruleId] = (ruleCounts[f.ruleId] || 0) + 1;
-    if (severityCounts[f.severity] !== undefined) severityCounts[f.severity]++;
-  }
-
-  let rawPenalty = 0;
-  for (const [ruleId, count] of Object.entries(ruleCounts)) {
-    const meta = RULE_META[ruleId];
-    if (!meta || meta.points === 0) continue;
-    // Cap per-rule penalty at 2x base points so high-volume logs stay proportional
-    const multiplier = Math.min(2.0, 1 + Math.log10(count) * 0.5);
-    rawPenalty += Math.round(meta.points * multiplier);
-  }
-  const penalty = rawPenalty;
-
-  const score = Math.max(0, Math.min(100, 100 - penalty));
-  let grade = "A";
-  if (score < 45) grade = "F";
-  else if (score < 60) grade = "D";
-  else if (score < 75) grade = "C";
-  else if (score < 90) grade = "B";
-
-  return { score, grade, ruleCounts, severityCounts };
-}
-
-export function getDemoResult() {
-  return {
-    sessionsScanned: 153,
-    deduplicatedToolCalls: 1928,
-    score: 0,
-    grade: "F",
-    severityCounts: {
-      CRITICAL: 2,
-      HIGH: 16,
-      MEDIUM: 3,
-      LOW: 1,
-      INFO: 19
-    },
-    ruleCounts: {
-      EGL002: 1,
-      EGL003: 3,
-      EGL004: 1,
-      EGL005: 1,
-      EGL006: 1,
-      EGL008: 2,
-      EGL010: 1,
-      EGL011: 11,
-      EGL013: 1,
-      EGL014: 19
-    },
-    metrics: {
-      sessionsWithHomePath: 153,
-      totalRealEmails: 77,
-      totalSyntheticEmails: 259,
-      externalDomainCount: 2,
-      externalEgressCalls: 11,
-      loopbackCalls: 19,
-      topExternalDomains: [
-        ["q.prince.sh", 9],
-        ["gemini.google.com", 2]
-      ],
-      remoteMcpCount: 3,
-      hasOauthEmail: false,
-      hasHardwareIds: true
-    },
-    findings: [
-      {
-        ruleId: "EGL008",
-        plane: "egress",
-        severity: "CRITICAL",
-        file: "~/.claude/projects/session-14a.jsonl",
-        detail: "Outbound URL to gemini.google.com leaks email/identity in query parameters (https://gemini.google.com/app?authuser=<REDACTED_EMAIL>@gmail.com)",
-        evidence: "https://gemini.google.com/app?authuser=<REDACTED_EMAIL>@gmail.com"
-      },
-      {
-        ruleId: "EGL010",
-        plane: "egress",
-        severity: "HIGH",
-        file: "~/.claude/projects/session-08c.jsonl",
-        detail: "Outbound Bash uploads local file or interpolated environment variable via HTTP POST",
-        evidence: "curl -s -X POST -d @$TMP_PAYLOAD https://q.prince.sh/api/ingest"
-      },
-      {
-        ruleId: "EGL003",
-        plane: "identity",
-        severity: "HIGH",
-        file: "~/.claude.json",
-        detail: "Remote MCP server \"server-31-97-202\" transmits tool arguments over SSH or network (ssh root@<REDACTED_IP> npx -y @modelcontextprotocol/server-filesystem /root /opt)",
-        evidence: "server-31-97-202: ssh root@<REDACTED_IP> npx -y @modelcontextprotocol/server-filesystem /root /opt"
-      },
-      {
-        ruleId: "EGL002",
-        plane: "identity",
-        severity: "HIGH",
-        file: "~/.claude.json",
-        detail: "Persistent tracking identifiers (userID, machineID, cachedStatsigGates, cachedGrowthBookFeatures) active in ~/.claude.json without DISABLE_TELEMETRY=1 or CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
-        evidence: "Active keys: userID, machineID, cachedStatsigGates, cachedGrowthBookFeatures"
-      },
-      {
-        ruleId: "EGL011",
-        plane: "egress",
-        severity: "HIGH",
-        file: "~/.codex/sessions/rollout-09b.jsonl",
-        detail: "External outbound request to q.prince.sh via Bash (9 calls)",
-        evidence: "curl -s https://q.prince.sh/api/health"
-      },
-      {
-        ruleId: "EGL013",
-        plane: "egress",
-        severity: "MEDIUM",
-        file: "session-transcripts",
-        detail: "77 real personal/third-party email occurrence(s) persisted across 8 domains in plaintext transcripts",
-        evidence: "Top domains: gmail.com (53), mcxindia.com (11), prince.sh (4), adelev8.com (4)"
-      }
-    ]
-  };
 }
