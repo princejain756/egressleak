@@ -96,7 +96,7 @@ function renderReport(res) {
   console.log(`${DIM}${"-".repeat(74)}${RESET}`);
 
   const m = res.metrics;
-  console.log(`${BOLD}${MAGENTA}[Plane 1] Context Identity & Telemetry Surface${RESET}`);
+  console.log(`${BOLD}${MAGENTA}[Plane 1] Context Identity, Telemetry & Tunnel Surface${RESET}`);
   console.log(
     `  * OAuth Email Auto-Inject (#55743): ${
       m.hasOauthEmail ? `${RED}ACTIVE in ~/.claude.json${RESET}` : `${GREEN}Not present in ~/.claude.json${RESET}`
@@ -118,7 +118,9 @@ function renderReport(res) {
 
   console.log(`\n${BOLD}${MAGENTA}[Plane 2] Outbound HTTP Egress & Transcript PII Replay${RESET}`);
   const extDomainsStr =
-    m.topExternalDomains.length > 0 ? m.topExternalDomains.map(([d, c]) => `${d} (${c})`).join(", ") : "none";
+    m.topExternalDomains.length > 0
+      ? m.topExternalDomains.map(([d, c]) => `${d} (${c})`).join(", ")
+      : "none";
   console.log(
     `  * External HTTP Egress Calls:       ${
       m.externalEgressCalls > 0
@@ -129,10 +131,14 @@ function renderReport(res) {
   console.log(
     `  * Loopback Dev Traffic Separated:   ${CYAN}${m.loopbackCalls} call(s) to 127.0.0.1/localhost (EGL014 false-positive guard)${RESET}`
   );
+  const emailDomainsStr =
+    m.topEmailDomains.length > 0
+      ? m.topEmailDomains.map(([d, c]) => `${d} (${c})`).join(", ")
+      : "none";
   console.log(
     `  * Real PII Emails in Transcripts:   ${
       m.totalRealEmails > 0
-        ? `${YELLOW}${m.totalRealEmails} hit(s) persisted in plaintext transcripts${RESET}`
+        ? `${YELLOW}${m.totalRealEmails} hit(s) in ${m.sessionsWithRealEmail} sessions across ${m.realEmailDomainCount} domains${RESET} [${emailDomainsStr}]`
         : `${GREEN}0 real email hits${RESET}`
     }`
   );
@@ -169,7 +175,7 @@ function renderReport(res) {
     }
   }
 
-  console.log("");
+  console.log(`\n${DIM}Run 'npx egressleak --emit-hook' to generate a deterministic PreToolUse guardrail against #107757 leaks.${RESET}\n`);
 }
 
 function main() {
@@ -182,7 +188,6 @@ function main() {
     console.log("0.1.0");
     process.exit(0);
   }
-
   if (opts.emitHook) {
     const { hookScript, settingsSnippet } = generatePreToolUseHook();
     if (opts.json) {
