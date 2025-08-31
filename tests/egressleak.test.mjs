@@ -17,7 +17,7 @@ test("1. filters synthetic AI trailer emails (noreply@anthropic.com) while flagg
   assert.equal(isSyntheticEmail("ops@sarojjain.com"), false);
 });
 
-test("2. detects #107757 User-Agent email leak (EGL007) and URL query email leak (EGL008) while separating 127.0.0.1 loopback (EGL014)", () => {
+test("2. detects #107757 User-Agent email leak (EGL007), query email leak (EGL008), secrets (EGL009/EGL010), and loopback (EGL014)", () => {
   const secCall = analyzeOutboundCall({
     toolName: "Bash",
     rawInput: JSON.stringify({
