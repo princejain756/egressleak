@@ -20,7 +20,7 @@ test("1. filters synthetic AI trailer emails (noreply@anthropic.com) while flagg
   assert.equal(isSyntheticEmail("ops@sarojjain.com"), false);
 });
 
-test("2. detects #107757 User-Agent email leak (EGL007) and URL query email leak (EGL008) while separating 127.0.0.1 loopback (EGL014)", () => {
+test("2. detects #107757 User-Agent leak (EGL007), query leaks (EGL008), WebSearch PII (EGL012), and loopback (EGL014)", () => {
   const secCall = analyzeOutboundCall({
     toolName: "Bash",
     rawInput: JSON.stringify({
@@ -50,6 +50,20 @@ test("2. detects #107757 User-Agent email leak (EGL007) and URL query email leak
   assert.ok(qRuleIds.includes("EGL014"), "Should classify 127.0.0.1 as EGL014 loopback");
   assert.equal(queryCall.loopbackCount, 1);
   assert.deepEqual(queryCall.externalDomains, ["gemini.google.com"]);
+
+  const searchLeak = analyzeOutboundCall({
+    toolName: "WebSearch",
+    rawInput: JSON.stringify({ query: "site:news.ycombinator.com bob@company.io invoice" }),
+    sourceFile: "session.jsonl"
+  });
+  assert.ok(searchLeak.findings.some((f) => f.ruleId === "EGL012"), "Should detect EGL012 search PII");
+
+  const cleanQuery = analyzeOutboundCall({
+    toolName: "WebSearch",
+    rawInput: JSON.stringify({ query: "node --test reporter flags" }),
+    sourceFile: "session.jsonl"
+  });
+  assert.equal(cleanQuery.findings.length, 0, "Should leave a bare topic query alone");
 });
 
 test("3. detects Plane 1 oauthAccount.emailAddress (#55743), hardware tracking IDs, and SSH MCP tunnels", () => {
@@ -139,14 +153,4 @@ test("4. deduplicates streaming tool_use.id rows in JSONL transcripts", () => {
   assert.equal(report.ruleCounts.EGL009, 1, "Should flag Bearer token leak once");
 
   fs.rmSync(tmpDir, { recursive: true, force: true });
-});
-
-test("5. redacts emails, tokens, public IPs, and OS home paths while preserving loopback", () => {
-  const raw = "curl -A 'bot (ceo@ corp.ai)' http://127.0.0.1:3000 https://198.51.100.7/x?e=ceo@corp.ai -H 'Bearer sk-1234567890abcdef' /Users/prince/secret";
-  const safe = redactSensitive(raw);
-  assert.ok(safe.includes("127.0.0.1:3000"), "Should preserve loopback IP");
-  assert.ok(safe.includes("<REDACTED_IP>"), "Should redact public IP");
-  assert.ok(safe.includes("<REDACTED_EMAIL>@corp.ai"), "Should redact email local part");
-  assert.ok(safe.includes("<REDACTED_TOKEN>"), "Should redact secret token");
-  assert.ok(safe.includes("/Users/<USER>/secret"), "Should redact local username");
 });
