@@ -154,3 +154,13 @@ test("4. deduplicates streaming tool_use.id rows in JSONL transcripts", () => {
 
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
+
+test("5. redacts emails, tokens, public IPs, and OS home paths while preserving loopback", () => {
+  const raw = "curl -A 'bot (ceo@ corp.ai)' http://127.0.0.1:3000 https://198.51.100.7/x?e=ceo@corp.ai -H 'Bearer sk-1234567890abcdef' /Users/prince/secret";
+  const safe = redactSensitive(raw);
+  assert.ok(safe.includes("127.0.0.1:3000"), "Should preserve loopback IP");
+  assert.ok(safe.includes("<REDACTED_IP>"), "Should redact public IP");
+  assert.ok(safe.includes("<REDACTED_EMAIL>@corp.ai"), "Should redact email local part");
+  assert.ok(safe.includes("<REDACTED_TOKEN>"), "Should redact secret token");
+  assert.ok(safe.includes("/Users/<USER>/secret"), "Should redact local username");
+});
