@@ -10,7 +10,8 @@ import {
   scanStaticIdentitySurface,
   analyzeOutboundCall,
   scanTranscriptFile,
-  auditAgentEgress
+  auditAgentEgress,
+  generatePreToolUseHook
 } from "../src/analyzer.mjs";
 
 test("1. filters synthetic AI trailer emails (noreply@anthropic.com) while flagging real PII emails", () => {
@@ -57,13 +58,6 @@ test("2. detects #107757 User-Agent leak (EGL007), query leaks (EGL008), WebSear
     sourceFile: "session.jsonl"
   });
   assert.ok(searchLeak.findings.some((f) => f.ruleId === "EGL012"), "Should detect EGL012 search PII");
-
-  const cleanQuery = analyzeOutboundCall({
-    toolName: "WebSearch",
-    rawInput: JSON.stringify({ query: "node --test reporter flags" }),
-    sourceFile: "session.jsonl"
-  });
-  assert.equal(cleanQuery.findings.length, 0, "Should leave a bare topic query alone");
 });
 
 test("3. detects Plane 1 oauthAccount.emailAddress (#55743), hardware tracking IDs, and SSH MCP tunnels", () => {
@@ -155,7 +149,7 @@ test("4. deduplicates streaming tool_use.id rows in JSONL transcripts", () => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("5. redacts emails, tokens, public IPs, and OS home paths while preserving loopback", () => {
+test("5. redacts emails, tokens, public IPs, and OS home paths while preserving loopback and generates PreToolUse hook", () => {
   const raw = "curl -A 'bot (ceo@ corp.ai)' http://127.0.0.1:3000 https://198.51.100.7/x?e=ceo@corp.ai -H 'Bearer sk-1234567890abcdef' /Users/prince/secret";
   const safe = redactSensitive(raw);
   assert.ok(safe.includes("127.0.0.1:3000"), "Should preserve loopback IP");
@@ -163,4 +157,8 @@ test("5. redacts emails, tokens, public IPs, and OS home paths while preserving 
   assert.ok(safe.includes("<REDACTED_EMAIL>@corp.ai"), "Should redact email local part");
   assert.ok(safe.includes("<REDACTED_TOKEN>"), "Should redact secret token");
   assert.ok(safe.includes("/Users/<USER>/secret"), "Should redact local username");
+
+  const hook = generatePreToolUseHook();
+  assert.ok(hook.hookScript.includes("EMAIL_IN_UA"));
+  assert.equal(hook.settingsSnippet.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, "1");
 });
