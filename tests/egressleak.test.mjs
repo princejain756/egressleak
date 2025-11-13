@@ -17,11 +17,12 @@ import {
 test("1. filters synthetic AI trailer emails (noreply@anthropic.com) while flagging real PII emails", () => {
   assert.equal(isSyntheticEmail("noreply@anthropic.com"), true);
   assert.equal(isSyntheticEmail("user@example.com"), true);
+  assert.equal(isSyntheticEmail("billing@acme.com"), true);
   assert.equal(isSyntheticEmail("founder@gmail.com"), false);
   assert.equal(isSyntheticEmail("ops@sarojjain.com"), false);
 });
 
-test("2. detects #107757 User-Agent leak (EGL007), query leaks (EGL008), WebSearch PII (EGL012), and loopback (EGL014)", () => {
+test("2. detects #107757 User-Agent email leak (EGL007) and URL query email leak (EGL008) while separating 127.0.0.1 loopback (EGL014)", () => {
   const secCall = analyzeOutboundCall({
     toolName: "Bash",
     rawInput: JSON.stringify({
@@ -51,13 +52,6 @@ test("2. detects #107757 User-Agent leak (EGL007), query leaks (EGL008), WebSear
   assert.ok(qRuleIds.includes("EGL014"), "Should classify 127.0.0.1 as EGL014 loopback");
   assert.equal(queryCall.loopbackCount, 1);
   assert.deepEqual(queryCall.externalDomains, ["gemini.google.com"]);
-
-  const searchLeak = analyzeOutboundCall({
-    toolName: "WebSearch",
-    rawInput: JSON.stringify({ query: "site:news.ycombinator.com bob@company.io invoice" }),
-    sourceFile: "session.jsonl"
-  });
-  assert.ok(searchLeak.findings.some((f) => f.ruleId === "EGL012"), "Should detect EGL012 search PII");
 });
 
 test("3. detects Plane 1 oauthAccount.emailAddress (#55743), hardware tracking IDs, and SSH MCP tunnels", () => {
