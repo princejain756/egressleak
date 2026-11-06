@@ -1,0 +1,41 @@
+{
+  "name": "egressleak",
+  "version": "0.1.0",
+  "description": "Zero-dependency outbound HTTP egress, User-Agent email leak, and context PII auditor for Claude Code, Codex CLI, and MCP configs, with deterministic PreToolUse hook generation.",
+  "type": "module",
+  "bin": {
+    "egressleak": "./bin/egressleak.mjs"
+  },
+  "main": "./src/analyzer.mjs",
+  "files": [
+    "bin/",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test tests/egressleak.test.mjs",
+    "demo": "node ./bin/egressleak.mjs --demo"
+  },
+  "keywords": [
+    "claude-code",
+    "codex",
+    "mcp",
+    "privacy",
+    "egress",
+    "user-agent",
+    "pii",
+    "security",
+    "ai-agents",
+    "dlp"
+  ],
+  "author": "Prince Jain <princejain756@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/princejain756/egressleak.git"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
